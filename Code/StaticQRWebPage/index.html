@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Financer App QR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: url('ganivi.jpg') no-repeat center center fixed;
+      background-size: cover;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #ffeb3b;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.7);
+    }
+
+    .qr-container {
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 16px;
+      padding: 40px 30px;
+      text-align: center;
+      animation: pulseGlow 2s infinite;
+    }
+
+    @keyframes pulseGlow {
+      0% { box-shadow: 0 0 10px #ffeb3b; }
+      50% { box-shadow: 0 0 20px #ffeb3b; }
+      100% { box-shadow: 0 0 10px #ffeb3b; }
+    }
+
+    h1 {
+      font-size: 2.2rem;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+
+    img {
+      width: 280px;
+      height: 280px;
+      margin: 20px 0;
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+
+    p {
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin: 10px 0;
+      cursor: default;
+    }
+
+    footer {
+      position: absolute;
+      bottom: 20px;
+      color: #eee;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="qr-container">
+    <h1>Financer App</h1>
+    <img src="qr.png" alt="QR Code" title="Scan to build Financer on your device">
+    <p title="Last updated: Jul 13, 02:00 UTC">📲 Scan Me</p>
+  </div>
+
+  <footer>
+    From QR to App – Your phone, your finance, your future.
+  </footer>
+</body>
+</html>

@@ -1,0 +1,223 @@
+resources:
+  repositories:
+    - repository: BackEnd
+      type: git
+      ref: main
+      name: BackEnd
+
+trigger: none
+  # branches:
+  #   include:
+  #     - main
+
+parameters:
+  - name: TimeOutMinutes
+    displayName: 'Select Timeout Minutes'
+    type: string
+    default: '30'
+    values:
+      - '10'
+      - '30'
+      - '60'
+      - '120'
+      - '300'
+
+pool:
+  name: DigitalOceanPool
+
+variables:
+  appName: financer-backend-$(Build.SourceBranchName)
+  dockerHubRepo: tsuproject/financer
+  dir: financer
+  VmType: Standard_B4ms
+
+
+jobs:
+  - job: BuildPublish
+    displayName: 'Build and Push Docker Image to Docker Hub'
+
+    steps:
+      - checkout: BackEnd
+
+      - script: pnpm install
+        workingDirectory: $(dir)
+        displayName: 'Install dependencies'
+
+      - script: pnpm build
+        workingDirectory: $(dir)
+        displayName: 'Build NestJS project'
+
+      - script: |
+          cat <<EOF > Dockerfile
+          FROM node:20-alpine
+          WORKDIR /app
+          COPY . .
+          RUN npm install -g pnpm
+          RUN corepack enable && corepack prepare pnpm@latest --activate && pnpm install
+          RUN pnpm build
+          EXPOSE 3000
+          CMD ["node", "dist/main"]
+          EOF
+        workingDirectory: $(dir)
+        displayName: 'Create Dockerfile'
+
+      - task: Docker@2
+        inputs:
+          containerRegistry: 'dockerhub-service-connection'
+          repository: $(dockerHubRepo)
+          command: 'buildAndPush'
+          dockerfile: '$(dir)/Dockerfile'
+          buildContext: '$(dir)'
+          tags: |
+            latest
+            $(Build.SourceBranchName)
+        displayName: 'Build and Push Docker image'
+
+      - script: docker image prune -f
+        displayName: 'Remove unused Docker images'
+        continueOnError: true
+
+  - job: Deploy
+    dependsOn: BuildPublish
+    displayName: 'Deploy VM And Application'
+
+    steps:
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az group create --name $(appName)-rg --location polandcentral
+        displayName: 'Create Resource Group in AzureCloud'
+
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az network vnet create \
+              --name $(appName)-vnet \
+              --resource-group $(appName)-rg \
+              --subnet-name $(appName)-subnet
+        displayName: 'Create vnet in AzureCloud'
+
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az network nsg create \
+              --name $(appName)-nsg \
+              --resource-group $(appName)-rg
+        displayName: 'Create NetworkSecurityGroup'
+
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az network nsg rule create \
+              --nsg-name $(appName)-nsg \
+              --resource-group $(appName)-rg \
+              --name AllowCidrBlockCustom22Inbound \
+              --priority 1000 \
+              --direction Inbound \
+              --access Allow \
+              --protocol TCP \
+              --source-address-prefixes 95.104.36.149/32 157.230.18.97/32 \
+              --destination-port-ranges 22
+        displayName: 'Create NSG Rule for SSH to allow only a specific IP Addresses'
+
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az network nsg rule create \
+              --nsg-name $(appName)-nsg \
+              --resource-group $(appName)-rg \
+              --name AllowCidrBlockCustom80Inbound \
+              --priority 1010 \
+              --direction Inbound \
+              --access Allow \
+              --protocol TCP \
+              --source-address-prefixes Internet  \
+              --destination-port-ranges 80
+        displayName: 'Create NSG Rule for inbound traffic on Port 80 from specific IP Addresses'
+
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az network nic create \
+              --name $(appName)-nic \
+              --resource-group $(appName)-rg \
+              --vnet-name $(appName)-vnet \
+              --subnet $(appName)-subnet \
+              --public-ip-address $(PUBLICIPRESOURCE) \
+              --network-security-group $(appName)-nsg
+        displayName: 'Create nic in AzureCloud'
+
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az vm create \
+              --name $(appName)-vm \
+              --resource-group $(appName)-rg \
+              --image Ubuntu2204 \
+              --location polandcentral \
+              --nics $(appName)-nic \
+              --size $(VmType)  \
+              --ssh-key-values "$(cat /home/azagent/.ssh/id_rsa.pub)" \
+              --custom-data ./cloud-init.txt
+        displayName: 'Create VM in AzureCloud'
+
+  - job: CleanupApproval
+    displayName: 'Manually Approve Resource Group Deletion'
+    dependsOn: Deploy
+    pool: server
+    condition: succeeded()
+    timeoutInMinutes: ${{ parameters.TimeOutMinutes }}
+    steps:
+      - task: ManualValidation@0
+        timeoutInMinutes: ${{ parameters.TimeOutMinutes }}
+        inputs:
+          instructions: 'Please validate the build configuration and resume'
+          onTimeout: 'resume'
+        displayName: 'Manual Approval Step'
+
+  - job: CleanupExecution
+    displayName: 'Delete Resource Group'
+    dependsOn:
+      - Deploy
+      - CleanupApproval
+    pool:
+      name: DigitalOceanPool
+    condition: or
+      (
+      failed('Deploy'),
+      succeeded('CleanupApproval'), 
+      eq(dependencies.Deploy.result, 'Canceled'), 
+      eq(dependencies.CleanupApproval.result, 'Canceled'),
+      eq(dependencies.CleanupApproval.result, 'SucceededWithIssues'),
+      failed('CleanupApproval')
+      )
+    steps:
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: '$(Subscription)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az group delete --name $(appName)-rg --yes --no-wait
+        displayName: 'Delete Resource Group'
